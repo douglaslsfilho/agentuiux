@@ -1,60 +1,86 @@
-from fastapi import FastAPI, HTTPException
+# main.py
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+import asyncio
+
 from app.agents.architecture_agent import ArchitectureAgent
 from app.agents.documentation_agent import DocumentationAgent
 from app.agents.uiux_agent import UIUXAgent
 from app.agents.reviewer_agent import ReviewerAgent
+from app.utils.document_reader import read_document_filebytes
 
-app = FastAPI(title="Frontend Intelligence Agent")
+app = FastAPI(title="Agent Frontend Orchestrator - UX Pipeline")
 
-# instanciando os agentes
+# Allow CORS if needed (ajuste origins conforme necessário)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 architecture_agent = ArchitectureAgent()
 documentation_agent = DocumentationAgent()
 uiux_agent = UIUXAgent()
 reviewer_agent = ReviewerAgent()
 
-
 def logger(msg: str):
-    """Logger simples para exibir mensagens no terminal."""
     print(msg)
 
 
 @app.post("/generate")
-async def generate(payload: dict):
+async def generate(
+    backlog: str = Form(...),
+    file: UploadFile | None = File(None)
+):
     """
-    Executa toda a pipeline de geração:
-    1. Arquitetura
-    2. Documentação
-    3. UI/UX
-    4. Revisão final
+    Endpoint que aceita:
+    - backlog (string, campo Form)
+    - file (opcional) -> pdf/docx/txt
+    Retorna a pipeline completa (architecture, documentation, uiux_analysis, review).
     """
     task_id = "TASK_001"
 
+    # extrair texto do arquivo, se enviado
+    documents_text = ""
+    if file:
+        file_bytes = await file.read()
+        documents_text = await read_document_filebytes(file_bytes, file.filename)
+
     try:
-        # 1️⃣ Arquitetura
-        arch_result = await architecture_agent.run(payload, logger, task_id)
+        # 1) Arquitetura
+        arch_result = await architecture_agent.run({"backlog": backlog}, logger, task_id)
         architecture = arch_result.get("frontend_architecture", "")
 
-        # 2️⃣ Documentação
+        # 2) Documentação
         doc_result = await documentation_agent.run(
-            {**payload, "architecture": architecture}, logger, task_id
+            {"backlog": backlog, "architecture": architecture},
+            logger,
+            task_id
         )
         documentation = doc_result.get("documentation", "")
 
-        # 3️⃣ UI/UX
+        # 3) UI/UX (agora recebe documents)
         uiux_result = await uiux_agent.run(
-            {**payload, "architecture": architecture}, logger, task_id
+            {
+                "backlog": backlog,
+                "architecture": architecture,
+                "documents": documents_text
+            },
+            logger,
+            task_id
         )
         uiux_analysis = uiux_result.get("uiux_analysis", "")
 
-        # 4️⃣ Revisão final
+        # 4) Review
         review_result = await reviewer_agent.run(
             {
-                **payload,
+                "backlog": backlog,
                 "architecture": architecture,
-                "documentation": documentation,
+                "documentation": documentation
             },
             logger,
-            task_id,
+            task_id
         )
         review = review_result.get("review", "")
 

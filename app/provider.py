@@ -1,36 +1,54 @@
 import os
 import asyncio
 from dotenv import load_dotenv
-from openai import OpenAI
 
-# Carrega variáveis do arquivo .env
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-if not OPENAI_API_KEY:
-    raise RuntimeError("Set OPENAI_API_KEY in environment (.env)")
 
-# Cria o cliente da nova API
-client = OpenAI(api_key=OPENAI_API_KEY)
+async def call_ai(prompt: str, system: str | None = None):
+    """
+    Chama o provedor de IA de forma síncrona numa thread e retorna o texto.
 
-# Função assíncrona para chamar o modelo
-async def call_ai(prompt: str, system: str | None = None, max_tokens: int = 800):
+    Implementa criação lazy do cliente OpenAI e fallback local quando
+    não há chave de API ou quando a inicialização do cliente falha
+    (útil para testes locais sem dependências externas).
+    """
+
     def sync_call():
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        # Nova forma de criar a requisição
-        resp = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=0.2,
-        )
-        return resp.choices[0].message.content.strip()
+        api_key = os.getenv("OPENAI_API_KEY")
+        # Fallback de desenvolvimento — evita erro quando não há API key ou compatibilidade de libs
+        if not api_key:
+            return (
+                "[MOCK OPENAI RESPONSE]\n"
+                "Nenhuma OPENAI_API_KEY encontrada — retornando resposta falsa para testes locais.\n\n"
+                + prompt[:4000]
+            )
 
-    # Executa em thread separada para não travar o event loop
+        try:
+            # import lazy para evitar efeitos colaterais em import time
+            from openai import OpenAI
+
+            client = OpenAI(api_key=api_key)
+            resp = client.responses.create(
+                model=MODEL,
+                input=messages,
+            )
+            return resp.output_text
+        except TypeError as e:
+            # Compatibilidade de versões (openai/httpx) — cair para fallback de desenvolvimento
+            return (
+                "[MOCK OPENAI RESPONSE - falha ao inicializar cliente OpenAI]\n"
+                f"Motivo: {e}\n\n"
+                + prompt[:4000]
+            )
+        except Exception as e:
+            return f"[Erro ao chamar OpenAI: {e}]"
+
     return await asyncio.to_thread(sync_call)
